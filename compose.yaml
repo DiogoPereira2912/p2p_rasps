@@ -1,0 +1,61 @@
+services:
+
+  broker:
+    container_name: mqtt_broker
+    image: eclipse-mosquitto:2.0
+    user: "${UID}:${GID}"
+    network_mode: "host"
+    restart: always
+    ports:
+      - "1884:1884"
+    volumes:
+      - ./mosquitto:/mosquitto/config
+      - ./mosquitto/conf.d:/mosquitto/conf.d
+
+  peer:
+    build: ./client
+    container_name: client
+    network_mode: "host"
+    depends_on:
+      broker:
+        condition: service_started
+    environment:
+      - BROKER_HOST=broker
+    volumes:
+      - ./client:/app
+      - ./mosquitto:/app/mosquitto
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    tty: true
+
+# Implementado novo
+
+  pipeline:
+    build: ./pipeline_layer
+    container_name: pipeline
+    network_mode: "host"
+    depends_on:
+      broker:
+        condition: service_started
+      peer:
+        condition: service_started
+    volumes:
+      - ./client:/app/client
+      - ./pipeline_layer:/app
+      - ./mosquitto:/app/mosquitto
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  aggregation:
+    build: ./aggregation_layer
+    container_name: aggregation
+    network_mode: "host"
+    depends_on:
+      broker:
+        condition: service_started
+      peer:
+        condition: service_started
+    volumes:
+      - ./client:/app/client
+      - ./aggregation_layer:/app
+      - ./mosquitto:/app/mosquitto
+      - /var/run/docker.sock:/var/run/docker.sock

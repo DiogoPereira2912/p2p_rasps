@@ -1,0 +1,5 @@
+scikit-learn
+PyYAML
+pandas
+numpy
+paho-mqtt
