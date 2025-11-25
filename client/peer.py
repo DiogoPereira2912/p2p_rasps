@@ -1,7 +1,4 @@
-import socket
-import threading
-import time
-import os
+import socket, threading, time, os, json
 from yaml import Loader, load
 from mqtt_layer import Communication_Layer
 
@@ -136,26 +133,26 @@ class Peer:
                         self.add_mosquitto_bridge(p[0], p[1])
                         if p != peer:
                             self.sock_broadcast.sendto(f"hi {peer[1]}".encode(), p)
+                    self._broadcast_known_peers_internally()
 
                 if msg.startswith("hello"):
                     self.sock_broadcast.sendto(
                         f"hi {self.mosquitto_port}".encode(), addr
                     )
 
-    def data_publisher(self):
-        ts = 1
-        while True:
-            time.sleep(3)
-            data_sample = {"ts": ts, "msg": f"Cheguei #{ts} de {self.peer_ip}"}
-            try:
-                self.mqtt_com.publish(data_sample, f"{self.broker_id}/test")
-            except Exception as e:
-                print(f"Erro ao publicar: {e}")
-
-            print(f"Enviado")
-            ts += 1
-
+    def _broadcast_known_peers_internally(self):
+        """
+        Envia a lista de IPs para os outros módulos (Pipeline/Agg) usarem.
+        """
+        ip_list = sorted([p[0] for p in self.known_peers])
+        known_peers_payload = json.dumps(ip_list)
+        self.mqtt_com.client.publish(payload = known_peers_payload, topic = "system/peers", retain=True)
+        print(f"[SYSTEM] Lista de peers atualizada e publicada: {ip_list}")
 
 if __name__ == "__main__":
     peer = Peer()
-    peer.data_publisher()
+    try:
+        while True:
+            time.sleep(1) 
+    except KeyboardInterrupt:
+        print("\nA desligar o Peer...")

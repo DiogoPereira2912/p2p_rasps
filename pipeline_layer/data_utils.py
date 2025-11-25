@@ -2,7 +2,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.datasets import load_breast_cancer, load_iris, load_wine, load_digits
 
 def load_data():
-    df = load_breast_cancer(as_frame=True).frame
+    df = load_wine(as_frame=True).frame
     return df
 
 def data_split(df, test_size=0.2, random_state=42):

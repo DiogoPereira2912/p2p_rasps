@@ -1,5 +1,4 @@
 ## THINGS
 
--> Basically tava a testar o envio e receção de parametros nos módulos de pipeline e aggregation 
-
--> testar essa porra
+-> Testei o envio de parametros e tava a funcionar entre modulos e com 3 rasps
+-> Estava a implementar a cena da topologia de rede

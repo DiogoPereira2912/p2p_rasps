@@ -4,7 +4,10 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from yaml import Loader, load
-import json
+import json, threading, time, uuid
+
+import warnings
+warnings.filterwarnings("ignore")
 
 from client.mqtt_layer import Communication_Layer
 
@@ -22,12 +25,24 @@ class Model_Manager:
         self.peer_ip = self.config["peer_ip"]
         self.broker_id = self.peer_ip.replace(".", "_")
 
+        self.mode = self.config["mode"]
+        self.server_ip = self.config["central_server"]
+        self.server_id = self.server_ip.replace(".", "_")
+
+        self.current_peer_list = []
+        self.pipeline_dest_indices = self.config["routing_topology"]["pipeline_topology"]
+
+        self.df = load_data()
+        self.X_train, self.X_test, self.y_train, self.y_test = data_split(self.df)
+
         self._setup_mqtt_client()
+        self._start_pipe_worker()
 
         with open("param_config.yaml", "r") as file:
             self.config_param = load(file, Loader=Loader)
 
         self.param_grid = build_param_grid(self.config_param["param_grid"])
+        threading.Thread(target=self.run_pipeline).start()
         self.best_model = None
         self.best_params = None
 
@@ -38,12 +53,19 @@ class Model_Manager:
         self.mqtt_com = Communication_Layer(
             broker=self.peer_ip,
             port=self.mosquitto_port,
-            client_id=f"pipeline_{self.broker_id}",
+            client_id=f"pipeline_{self.broker_id}_{str(uuid.uuid4())[:4]}",
             base_topic="",
             qos=1,
         )
-        # TODO: add subscribe do update via MQTT to train/
-        self.mqtt_com.subscribe(topic="train/#")
+        if self.mode == "federated":
+            target_topic = f"{self.server_id}/train"
+        else:
+            target_topic = "+/train"
+
+        self.mqtt_com.subscribe(topic=target_topic)
+        #self.mqtt_com.subscribe(topic="+/train")
+
+        self.mqtt_com.subscribe("system/peers")
 
     def build_pipeline(self, scaler, model):
         """
@@ -95,29 +117,82 @@ class Model_Manager:
         return train_accuracy, test_accuracy
 
     def run_pipeline(self):
-        df = load_data()
-        X_train, X_test, y_train, y_test = data_split(df)
         pipeline = self.build_pipeline(
             scaler=StandardScaler(), model=RandomForestClassifier()
         )
         self.best_params, self.best_model = self.param_tuning(
-            pipeline, self.param_grid, X_train, y_train
+            pipeline, self.param_grid, self.X_train, self.y_train
         )
         trained_params_payload = {
             "id": self.peer_ip,
             "trained_params": self.best_params,
         }
-        # TODO: publish best_params via MQTT to agg/
         self.mqtt_com.publish(
-            payload=trained_params_payload, topic=f"{self.broker_id}/agg/"
+            payload=trained_params_payload, topic=f"{self.broker_id}/agg"
         )
         train_acc, test_acc = self.evaluate(
-            self.best_model, X_train, X_test, y_train, y_test
+            self.best_model, self.X_train, self.X_test, self.y_train, self.y_test
         )
-        print("Best Parameters:", self.best_params)
-        print(f"Train Accuracy: {train_acc:.4f}, Test Accuracy: {test_acc:.4f}")
 
+    def create_adaptive_grid(self, origin_params, spread=0.2):
+        """
+        Gera uma nova grid de pesquisa centrada nos valores recebidos.
+        spread=0.2 significa que vamos procurar 20% acima e 20% abaixo.
+        """
+        new_grid = {}
+        
+        for param, value in origin_params.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if isinstance(value, int):
+                    lower = int(value * (1 - spread))
+                    upper = int(value * (1 + spread))
+                    
+                    # impede que arredonde para 0 ou negativo
+                    lower = max(1, lower)
+                    upper = max(1, upper)
+
+                    values = sorted(list(set([max(1, lower), value, upper])))
+                    new_grid[param] = values
+                else:
+                    lower = value * (1 - spread)
+                    upper = value * (1 + spread)
+                    # impede que arredonde para 0 ou negativo
+                    lower = max(1, lower)
+                    upper = max(1, upper)
+
+                    new_grid[param] = [int(lower), int(value), int(upper)]
+            else:
+                new_grid[param] = [int(value)]
+        return new_grid
+
+    def pipe_worker_on_message(self):
+        """
+        Worker para processar mensagens de pipeline recebidas via MQTT.
+        """
+        while True:
+            topic, data = self.mqtt_com.msg_queue.get()
+
+            if topic == "system/peers":
+                print(f"[{self.broker_id}] RECEIVED on {topic}: {data}")
+                self.current_peer_list = data
+                print(f"[PIPELINE] Lista de peers atualizada: {self.current_peer_list}")
+                self.mqtt_com.msg_queue.task_done()
+                continue
+            else:
+                print(f"[{self.broker_id}] RECEIVED on {topic}: {data}")
+                new_params = data['agg_params']
+                self.param_grid = self.create_adaptive_grid(new_params)
+                self.run_pipeline()
+                self.mqtt_com.msg_queue.task_done()
+
+    def _start_pipe_worker(self):
+        pipe_thread = threading.Thread(target=self.pipe_worker_on_message)
+        pipe_thread.start()
 
 if __name__ == "__main__": 
     manager = Model_Manager()
-    manager.run_pipeline()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass

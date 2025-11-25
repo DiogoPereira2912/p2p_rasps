@@ -10,12 +10,8 @@ def aggregate_avg(params_dict):
     """
     aggregated_params = {}
     num_nodes = len(params_dict)
-    print("Number of nodes:", num_nodes)
-
     for _, node_params in params_dict.items():
-        # print("Node parameters:", node_params)
         for param, value in node_params.items():
-            # print(f"Processing param: {param} with value: {value}")
             if param not in aggregated_params:
                 aggregated_params[param] = 0
             aggregated_params[param] += value / num_nodes

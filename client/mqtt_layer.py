@@ -1,4 +1,4 @@
-import json, queue
+import json, queue, uuid
 from paho.mqtt import client as mqtt_client
 
 class Communication_Layer:
@@ -33,10 +33,14 @@ class Communication_Layer:
         qos: qualidade do serviço MQTT
         """
         self.client_id = client_id
+        self.topic_broker_id = broker.replace(".", "_")
         self.base_topic = base_topic
         self.qos = qos
+        self.msg_queue = queue.Queue()
         self.client = self._connect_mqtt(broker, port, user, pwd)
         self.client.loop_start()
+        self.client.on_message = self.on_message
+
 
     def _connect_mqtt(self, broker, port, user, pwd):
         def on_connect(client, userdata, flags, rc):
@@ -66,12 +70,19 @@ class Communication_Layer:
         if result[0] != 0:
             print(f"[{self.client_id}] Failed to publish to {full_topic}")
 
+    def on_message(self, client, userdata, msg):
+        '''
+        Callback para processar mensagens recebidas.
+        Acrescenta mensagens à fila interna, ignorando mensagens do próprio client_id.
+        '''
+        if msg.topic.startswith(f"{self.topic_broker_id}/"): # impede que ouça as suas
+            return
+        data = json.loads(msg.payload.decode())
+        # print(f"[{self.topic_broker_id}] RECEIVED on {msg.topic}: {data}")
+        self.msg_queue.put((msg.topic, data)) 
+
     def subscribe(self, topic):
-        def on_message(client, userdata, msg):
-            if msg.topic.startswith(f"{self.client_id}/"):
-                return
-            data = json.loads(msg.payload.decode())
-            print(f"[{self.client_id}] RECEIVED on {msg.topic}: {data}")
-            return data
+        '''
+        Subscreve um tópico MQTT.
+        '''
         self.client.subscribe(topic, qos=self.qos)
-        self.client.on_message = on_message
